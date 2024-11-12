@@ -1,0 +1,29 @@
+CREATE TABLE user (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    userid VARCHAR(255) UNIQUE NOT NULL
+);
+
+CREATE TABLE file_stats (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    total_files INT DEFAULT 0,
+    total_uploads INT DEFAULT 0,
+    total_downloads INT DEFAULT 0,
+    total_documents INT DEFAULT 0,
+    total_images INT DEFAULT 0,
+    total_videos INT DEFAULT 0,
+    total_audios INT DEFAULT 0,
+    total_others INT DEFAULT 0
+);
+
+CREATE TABLE file (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    path VARCHAR(255) NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    size INT NOT NULL,
+    type VARCHAR(100),
+    description VARCHAR(255),
+    datestamp VARCHAR(255),
+    lastmodified VARCHAR(255)
+);
