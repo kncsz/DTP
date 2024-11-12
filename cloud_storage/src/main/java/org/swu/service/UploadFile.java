@@ -47,7 +47,7 @@ public class UploadFile {
             fileName = file.getOriginalFilename();
 
             // 指向上传到服务器上的文件目录
-            Path filePath = Paths.get("/home/kncsz/cloudstorage/userfile/user1/" + fileName);
+            Path filePath = Paths.get("/home/kncsz/cloudstorage/userfile/user1/" + getFileName(fileName));
 
             // 将上传的文件保存到目标路径
             Files.copy(file.getInputStream(), filePath);
@@ -55,6 +55,8 @@ public class UploadFile {
             // 修改文件所有权
             changeFileOwnership("/home/kncsz/cloudstorage/userfile/user1/" + fileName, "kncsz");
 
+            // 传输层加密
+            
             // 获取xdp分析结果
 
             // 根据结果判断数据包类型
@@ -77,6 +79,10 @@ public class UploadFile {
             return response;
         }
         return response;
+    }
+
+    private static String getFileName(String fileName) {
+        return fileName;
     }
 
     private void changeFileOwnership(String filePath, String user) throws IOException, InterruptedException {
