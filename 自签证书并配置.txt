@@ -1,0 +1,42 @@
+首先，我们需要生成一个私钥，私钥是用来签名证书的。
+openssl genpkey -algorithm RSA -out myprivate.key -aes256
+密码：lyq20040513
+
+使用私钥自签名证书
+openssl req -new -x509 -key myprivate.key -out mycertificate.crt -days 365
+
+首先，创建一个 PKCS12 文件，将 .key 和 .crt 合并到一个文件中，这样更便于导入 keystore。
+openssl pkcs12 -export -in mycertificate.crt -inkey myprivate.key -out cloudstorage.p12 -name mycert
+导出密码：lyq20040513
+
+查看java安装路径
+update-alternatives --display java
+which java
+
+在/usr/lib/jvm/java-21-openjdk-amd64/下执行
+keytool -importkeystore -deststorepass lyq20040513 -destkeypass lyq20040513 -destkeystore keystore.jks -srckeystore /home/kncsz/cloudstorage.p12 -srcstoretype PKCS12 -srcstorepass lyq20040513
+
+复制文件：
+scp root@192.168.81.135:/usr/lib/jvm/java-21-openjdk-amd64/keystore.jks D:\
+
+说明
+-deststorepass changeit: 这是目标 keystore 的密码。changeit 是一个默认密码，但你可以换成自己的密码。这个密码在之后需要访问或修改 keystore 内容时会用到。
+-destkeypass changeit: 这是密钥的密码，也可以自定义。用于访问 keystore 中的密钥条目。
+
+在主机上信任自签名证书
+由于使用的是自签名证书，主机访问时会提示不安全。可以将自签名证书导入主机的受信任证书库，以便主机信任虚拟机的证书。
+
+导出虚拟机的证书
+在虚拟机上将 server.crt 拷贝到主机上，比如使用 scp 命令。
+
+bash
+复制代码
+scp /path/to/server.crt user@host:/path/to/server.crt
+在主机上导入证书
+在 Linux 主机上： 将证书复制到 /usr/local/share/ca-certificates/ 目录，然后更新证书库：
+
+bash
+复制代码
+sudo cp server.crt /usr/local/share/ca-certificates/server.crt
+sudo update-ca-certificates
+在 Windows 主机上： 双击 server.crt 文件，选择“安装证书”，将其安装到“受信任的根证书颁发机构”中。
