@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration status="INFO">
+    <Appenders>
+        <!-- 控制台输出 -->
+        <Console name="Console" target="SYSTEM_OUT">
+            <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss} [%t] %-5level %logger{36} - %msg%n"/>
+        </Console>
+
+        <!-- 文件输出 -->
+        <File name="AccessFile" fileName="logs/access.log" append="true">
+            <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss} [%t] %-5level %logger{36} - %msg%n"/>
+        </File>
+    </Appenders>
+
+    <Loggers>
+        <!-- Spring Web日志 -->
+        <Logger name="org.springframework.web" level="INFO" additivity="false">
+            <AppenderRef ref="Console"/>
+        </Logger>
+
+        <!-- 自定义的日志记录器 -->
+        <Logger name="org.swu.api" level="INFO" additivity="false">
+            <AppenderRef ref="AccessFile"/>
+        </Logger>
+
+        <!-- 自定义的日志记录器 -->
+        <Logger name="org.swu.service" level="INFO" additivity="false">
+            <AppenderRef ref="AccessFile"/>
+        </Logger>
+
+        <!-- 默认根日志 -->
+        <Root level="INFO">
+            <AppenderRef ref="Console"/>
+        </Root>
+    </Loggers>
+</Configuration>
