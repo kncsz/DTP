@@ -1,0 +1,337 @@
+// Distributed Denial of Service
+
+#include "vmlinux.h"
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_endian.h>
+#include <bpf/bpf_core_read.h>
+
+#define ETH_P_IP 0x0800 // 以太网类型
+#define IPPROTO_TCP 6   // TCP协议号
+
+#define IPPROTO_ICMP 1  // ICMP协议号
+#define MAX_ICMP_BANDWIDTH 1024  // 每秒允许的ICMP总字节数
+#define ICMP_RATE_LIMIT 10       // 单个IP每秒允许的ICMP包数
+
+#define ETH_P_ARP 0x0806 // ARP报文类型
+#define MAX_ARP_REQUESTS 50 // 每秒最多允许的ARP请求数量
+#define ARP_REQUEST_LIMIT_TIME 1000000000 // 1秒的时间（单位：纳秒）
+
+#define IPPROTO_UDP 17  // UDP 协议号
+#define UDP_RATE_LIMIT 1000  // 每秒允许的最大 UDP 包数
+#define UDP_DELAY_TIME 1000000000  // 延迟 1 秒（单位：纳秒）
+
+#define SYN_RATE_LIMIT 100       // 单个IP每秒允许的SYN包数
+#define SYN_TRIP_TIME 3000000000  // 3秒时间限制（单位：纳秒）
+
+__always_inline int bpf_memcmp(void *a, void *b, size_t len) {
+    __u8 *a_ptr = a;
+    __u8 *b_ptr = b;
+    for (size_t i = 0; i < len; i++) {
+        if (a_ptr[i] != b_ptr[i]) {
+            return 1; // 不相等
+        }
+    }
+    return 0; // 相等
+}
+
+// static inline int bpf_memcmp(const void *s1, const void *s2, size_t len) {
+//    unsigned char *a = (unsigned char *)s1;
+//    unsigned char *b = (unsigned char *)s2;
+//    size_t i;
+
+//    for (i = 0; i < len; i++) {
+//        if (a[i] != b[i])
+//            return a[i] - b[i];
+//    }
+//    return 0;
+// }
+
+// 定义哈希表存储 UDP 包速率信息
+// struct udp_packet {
+//    __u32 src_ip;
+//    __u32 dst_ip;
+//    __u16 src_port;
+//    __u16 dst_port;
+//    __u8 data[128];  // UDP 数据（例如可以保存部分 UDP 数据）
+//};
+
+//struct {
+//    __uint(type, BPF_MAP_TYPE_HASH);
+//    __type(key, __u32);   // 源 IP 地址
+//    __type(value, __u64); // 最后一次 UDP 包的时间戳（ns）
+//    __uint(max_entries, 1024);
+//} udp_rate_map SEC(".maps");
+
+// 定义哈希表存储待发送的 UDP 包（排队）
+//struct {
+//    __uint(type, BPF_MAP_TYPE_PERF_EVENT_ARRAY);
+//    __type(value, struct udp_packet);
+//    __uint(max_entries, 1024);
+//} udp_queue SEC(".maps");
+
+// 定义哈希表存储源 IP 和时间戳
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __type(key, __u32);   // 源 IP 地址
+    __type(value, __u64); // 最后一次 ARP 请求的时间戳（ns）
+    __uint(max_entries, 4096);
+} arp_requests_map SEC(".maps");
+
+// 定义 BPF 哈希表用于存储 IP 的速率信息
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __type(key, __u32);   // 源 IP 地址
+    __type(value, __u64); // 最后一次 ICMP 请求的时间戳（ns）
+    __uint(max_entries, 4096);
+} icmp_rate_map SEC(".maps");
+
+// 定义哈希表存储封禁 IP
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __type(key, __u32);   // 源 IP 地址
+    __type(value, __u64); // 封禁截止时间（ns）
+    __uint(max_entries, 4096);
+} blocked_ip_map SEC(".maps");
+
+// 定义哈希表用于存储 TCP SYN 包速率信息
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __type(key, __u32);   // 源 IP 地址
+    __type(value, __u64); // 最后一次 SYN 包的时间戳（ns）
+    __uint(max_entries, 4096);
+} syn_rate_map SEC(".maps");
+
+// 定义哈希表存储 IP 到 MAC 地址的映射
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __type(key, __u32);      // IP 地址
+    __type(value, __u8[6]);  // MAC 地址（6字节）
+    __uint(max_entries, 4096);
+} ip_to_mac_map SEC(".maps");
+
+// 定义哈希表存储首次 ARP 包到达的时间戳
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __type(key, __u32);   // 源 IP 地址
+    __type(value, __u64); // 首次接收时间戳（ns）
+    __uint(max_entries, 4096);
+} first_arp_time_map SEC(".maps");
+
+// 定义哈希表存储三元组信息
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __type(key, __u64);   // 三元组信息（src_ip, src_port, dst_ip）
+    __type(value, __u64); // 最后一次 SYN 包的时间戳（ns）
+    __uint(max_entries, 4096);
+} syn_triplet_map SEC(".maps");
+
+// 定义白名单哈希表
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __type(key, __u64);   // 三元组信息（src_ip, src_port, dst_ip）
+    __type(value, __u64); // 白名单的时间戳（ns）
+    __uint(max_entries, 4096);
+} syn_whitelist_map SEC(".maps");
+
+// 计算三元组的唯一哈希值（src_ip, src_port, dst_ip）
+__always_inline __u64 generate_triplet_key(__u32 src_ip, __u16 src_port, __u32 dst_ip) {
+    return (__u64)src_ip << 32 | ((__u64)src_port << 16) | dst_ip;
+}
+
+//}
+/// @ifindex 2
+/// @flags 0
+/// @xdpopts {"old_prog_fd":0}
+SEC("xdp")
+int xdp_firewall(struct xdp_md* ctx) {
+    void* data = (void*)(long)ctx->data;
+    void* data_end = (void*)(long)ctx->data_end;
+
+    int packet_size = data_end - data;
+    bpf_printk("Packet size is:%d", packet_size);
+    
+    // 检查以太网头部
+    struct ethhdr* eth = data;
+    if ((void*)eth + sizeof(*eth) > data_end)
+        return XDP_PASS;
+
+    // 检查是否为 IP 包
+    // if (eth->h_proto != __bpf_htons(ETH_P_IP))
+        // return XDP_PASS;
+
+    // 解析 IP 头部
+    struct iphdr* iph = (void*)eth + sizeof(*eth);
+    if ((void*)iph + sizeof(*iph) > data_end)
+        return XDP_PASS;
+
+    // 解析 TCP 头部
+    struct tcphdr* tcph = (void*)iph + sizeof(*iph);
+    if ((void*)tcph + sizeof(*tcph) > data_end)
+        return XDP_PASS;
+
+    // 解析传输层头部
+    struct udphdr* udph = (struct udphdr*)((void*)iph + sizeof(*iph));
+
+    if ((void*)udph + sizeof(*udph) > data_end)
+        return XDP_PASS;
+
+    // 获取源端口和目的端口
+        __u16 src_port, dst_port;
+        if (iph->protocol == IPPROTO_TCP) {
+            src_port = bpf_ntohs(tcph->source);
+            dst_port = bpf_ntohs(tcph->dest);
+        } else if (iph->protocol == IPPROTO_UDP) {
+            src_port = bpf_ntohs(udph->source);
+            dst_port = bpf_ntohs(udph->dest);
+        }
+    
+    // 如果源或目的端口是 443，直接放行
+        if (src_port == 443 || dst_port == 443) {
+            return XDP_PASS;
+        }
+
+    __u32 src_ip = iph->saddr;
+    __u32 dst_ip = iph->daddr;
+    __u64 current_time = bpf_ktime_get_ns();
+
+    // 检查是否被封禁
+    __u64* block_time = bpf_map_lookup_elem(&blocked_ip_map, &src_ip);
+    // bpf_printk("current_time is: %llu",current_time);
+    if (block_time && current_time < *block_time) {
+        bpf_printk("current_time is: %llu, block_time is: %llu, Blocked IP: %pi4",current_time, *block_time, &src_ip);
+        return XDP_DROP;
+    }
+
+    // UDP 
+    if (iph->protocol == IPPROTO_UDP) {
+        return XDP_ABORTED;
+    }
+
+    // ARP报文的处理
+    if (eth->h_proto == __bpf_htons(ETH_P_ARP)) {
+        struct arphdr* arp = (struct arphdr*)(eth + 1);
+        if ((void*)arp + sizeof(*arp) > data_end)
+            return XDP_PASS;
+
+	__u32 *src_ip = (__u32 *)(long)arp + 2; // ARP请求发送者的IP地址
+        __u64 current_time = bpf_ktime_get_ns();
+
+	// 首包丢弃，检查是否第一次收到 ARP 包
+        __u64* first_time = bpf_map_lookup_elem(&first_arp_time_map, &src_ip);
+        if (!first_time) {
+            // 第一次接收到该源 IP 的 ARP 包，丢弃该包，并记录时间
+            bpf_map_update_elem(&first_arp_time_map, &src_ip, &current_time, BPF_ANY);
+            bpf_printk("Drop the first arp packet，Source IP: %pi4", &src_ip);
+            return XDP_DROP;
+        }
+
+        // 检查源 IP 是否频繁发送 ARP 请求
+        __u64* last_time = bpf_map_lookup_elem(&arp_requests_map, &src_ip);
+        if (last_time) {
+            __u64 time_diff = current_time - *last_time;
+            if (time_diff < ARP_REQUEST_LIMIT_TIME) {
+                // 如果发送过多 ARP 请求，则封禁该 IP
+                __u64 BLOCK_TIME = 10000000000; // 10 秒封禁时间
+                __u64 block_until = current_time + BLOCK_TIME;
+                bpf_map_update_elem(&blocked_ip_map, &src_ip, &block_until, BPF_ANY);
+                bpf_printk("Detect Arp Flood, blocked ip: %pi4，block until: %llu", &src_ip, &block_until);
+                return XDP_DROP;
+            }
+        }
+        bpf_map_update_elem(&arp_requests_map, &src_ip, &current_time, BPF_ANY);
+
+	// 检查该 IP 地址是否已经在哈希表中存在
+        __u8 (*stored_mac)[6] = bpf_map_lookup_elem(&ip_to_mac_map, &src_ip);
+        if (stored_mac) {
+            // 如果 MAC 地址不同，说明发生了 IP 地址冲突
+            if (bpf_memcmp(eth -> h_source, *stored_mac, 6) != 0) {
+                bpf_printk("IP conflict detected for IP: %pi4", &src_ip);
+                return XDP_DROP;  // 丢弃这个冲突的 ARP 响应
+            }
+        }
+
+        // 更新 IP 到 MAC 地址的映射
+        bpf_map_update_elem(&ip_to_mac_map, &src_ip, eth -> h_source, BPF_ANY);
+    }
+
+    // ICMP查询报文限制逻辑
+    if (iph->protocol == IPPROTO_ICMP) {
+        struct icmphdr* icmp = (void*)iph + sizeof(*iph);
+        if ((void*)icmp + sizeof(*icmp) > data_end)
+            return XDP_PASS;
+	
+	if (icmp->type == 0) {
+            bpf_printk("Filtered ICMP (Reply) from IP: %pi4", &src_ip);
+            icmp->type = 3;
+            icmp->code = 1;  // 主机不可达（Host Unreachable）
+
+            // 重新计算校验和（ICMP 校验和是针对整个 ICMP 数据包的）
+            icmp->checksum = 0;
+            icmp->checksum = bpf_csum_diff(0, 0, (void*)icmp, sizeof(*icmp), 0);
+        
+            // bpf_printk("Modified ICMP Reply to Host Unreachable (Type 3, Code 1) from IP: %pi4", &src_ip);
+            return XDP_TX;  // 发送修改后的包
+        }
+        
+	if (icmp -> type ==8){
+		// 更新 ICMP 包速率
+        	__u64* last_time = bpf_map_lookup_elem(&icmp_rate_map, &src_ip);
+        	if (last_time) {
+            		// bpf_printk("last_time is: %llu", *last_time);
+            		// 计算时间间隔（单位：毫秒）
+            		__u64 ns = 1000000;
+            		__u64 time_diff = (current_time - *last_time) / ns;
+            		// bpf_printk("time_diff is: %llu",time_diff);
+            		if (time_diff < 1000 / ICMP_RATE_LIMIT) {
+                		// 超出速率限制，封禁 IP
+                		__u64 BLOCK_TIME = 10000000000;
+                		__u64 block_until = current_time + BLOCK_TIME;
+                		bpf_map_update_elem(&blocked_ip_map, &src_ip, &block_until, BPF_ANY);
+                		bpf_printk("Detect Icmp Flood，blocked ip: %pi4, block until: %llu", &src_ip, block_until);
+                		return XDP_DROP;
+            		}
+        	}
+        	bpf_map_update_elem(&icmp_rate_map, &src_ip, &current_time, BPF_ANY);
+	}
+    }
+
+    // SYN包处理逻辑
+    if (tcph->syn && !tcph->ack) {
+        // 获取三元组信息（源 IP, 源端口, 目的 IP）
+        __u64 triplet_key = generate_triplet_key(src_ip, tcph->source, dst_ip);
+        __u64 current_time = bpf_ktime_get_ns();
+
+        // 检查是否在白名单中
+        __u64* whitelist_time = bpf_map_lookup_elem(&syn_whitelist_map, &triplet_key);
+        if (whitelist_time) {
+            // 如果在白名单中，直接放行该包
+            return XDP_PASS;
+        }
+
+        // 检查是否为首次 SYN 包
+        __u64* last_time = bpf_map_lookup_elem(&syn_triplet_map, &triplet_key);
+        if (!last_time) {
+            // 如果是第一次接收到该三元组的 SYN 包，则丢弃并记录时间
+            bpf_map_update_elem(&syn_triplet_map, &triplet_key, &current_time, BPF_ANY);
+            bpf_printk("Drop Source IP: %pi4，Source Port: %u，Dest IP: %pi4's first SYN packet", &src_ip, tcph->source, &dst_ip);
+            return XDP_DROP;  // 丢弃首个 SYN 包
+        }
+
+        // 判断时间间隔，是否在 3 秒内
+        __u64 time_diff = current_time - *last_time;
+        if (time_diff < SYN_TRIP_TIME) {
+            // 如果在 3 秒内再次接收到相同的三元组 SYN 包，则放行并加入白名单
+            bpf_map_update_elem(&syn_whitelist_map, &triplet_key, &current_time, BPF_ANY);
+            bpf_printk("Source IP: %pi4，Source Port: %u，Dest IP: %pi4 now in white list", &src_ip, tcph->source, &dst_ip);
+            return XDP_PASS;  // 放行
+        }
+
+        // 如果没有在 3 秒内重复出现，则更新时间戳
+        bpf_map_update_elem(&syn_triplet_map, &triplet_key, &current_time, BPF_ANY);
+    }
+
+
+    return XDP_PASS;
+}
+
+char __license[] SEC("license") = "GPL";
