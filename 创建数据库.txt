@@ -1,10 +1,51 @@
+/*****************************************************
+id：主键
+userid：用户ID
+bame：用户名
+datestamp：创建时间
 CREATE TABLE user (
     id INT AUTO_INCREMENT PRIMARY KEY,
+    userid VARCHAR(255) UNIQUE NOT NULL,
     name VARCHAR(255) NOT NULL,
-    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    userid VARCHAR(255) UNIQUE NOT NULL
+    datestamp VARCHAR(255) UNIQUE NOT NULL
 );
 
+*****************************************************/
+
+
+
+/*****************************************************
+id:主键
+path：文件的父目录的绝对路径
+name：文件名或文件夹名
+size：文件大小或文件夹大小
+type：类型（file，directory）
+description：描述
+datestamp：创建时间
+lastmodified：最后修改时间
+CREATE TABLE file (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    path VARCHAR(255) NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    size INT NOT NULL,
+    type VARCHAR(100),
+    description VARCHAR(255),
+    datestamp VARCHAR(255),
+    lastmodified VARCHAR(255)
+);
+*****************************************************/
+
+
+
+/*****************************************************
+Total_files：总文件数
+Total_uploads：总上传数
+Total_downloads: 总下载数
+Total_documents：总文档数
+total_images：总图片数
+total_videos ：总视频数
+total_audios：总音频数
+total_others：其它总数
 CREATE TABLE file_stats (
     id INT AUTO_INCREMENT PRIMARY KEY,
     total_files INT DEFAULT 0,
@@ -16,14 +57,4 @@ CREATE TABLE file_stats (
     total_audios INT DEFAULT 0,
     total_others INT DEFAULT 0
 );
-
-CREATE TABLE file (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    path VARCHAR(255) NOT NULL,
-    name VARCHAR(255) NOT NULL,
-    size INT NOT NULL,
-    type VARCHAR(100),
-    description VARCHAR(255),
-    datestamp VARCHAR(255),
-    lastmodified VARCHAR(255)
-);
+*****************************************************/
