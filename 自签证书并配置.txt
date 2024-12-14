@@ -9,6 +9,9 @@ openssl req -new -x509 -key myprivate.key -out mycertificate.crt -days 365
 openssl pkcs12 -export -in mycertificate.crt -inkey myprivate.key -out cloudstorage.p12 -name mycert
 导出密码：lyq20040513
 
+查看keystore的证书别名
+keytool -list -v -keystore keystore.jks
+
 查看java安装路径
 update-alternatives --display java
 which java
@@ -18,6 +21,8 @@ keytool -importkeystore -deststorepass lyq20040513 -destkeypass lyq20040513 -des
 
 复制文件：
 scp root@192.168.81.135:/usr/lib/jvm/java-21-openjdk-amd64/keystore.jks D:\
+如果不允许root用户登陆，则采用其它用户登陆
+如果出现permission denied，则需要为文件的Other赋予读写权限。
 
 说明
 -deststorepass changeit: 这是目标 keystore 的密码。changeit 是一个默认密码，但你可以换成自己的密码。这个密码在之后需要访问或修改 keystore 内容时会用到。
@@ -40,3 +45,18 @@ bash
 sudo cp server.crt /usr/local/share/ca-certificates/server.crt
 sudo update-ca-certificates
 在 Windows 主机上： 双击 server.crt 文件，选择“安装证书”，将其安装到“受信任的根证书颁发机构”中。
+
+Linux文件权限
+Owner（文件所有者）
+Owner 是文件或目录的创建者，通常被视为文件的所有者。
+Owner 对文件拥有最高的权限，可以自由地更改文件的权限、内容，甚至可以删除文件。
+只有拥有者和系统管理员（root）可以更改文件的所有者。
+2. Group（组）
+Group 是指文件所属的用户组。
+一个文件可以被分配给一个特定的组，组内的用户可以共享文件的权限。
+如果文件的所有者将文件分配给一个特定组，那么该组中的所有用户将具有文件的 Group 权限。
+例如，如果一个文件属于组 developers，则 developers 组中的所有用户都将具有文件的组权限。
+3. Other（其他用户）
+Other 指的是系统中除了 Owner 和 Group 成员以外的所有其他用户。
+如果一个用户既不是文件的所有者，也不属于文件的组，那么该用户就属于 Other。
+其他用户对文件的权限通常最少，为了安全性，通常限制 Other 的写入和执行权限。
