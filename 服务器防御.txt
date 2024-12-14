@@ -1,0 +1,150 @@
+10.69.230.119服务器防御程序
+#include "vmlinux.h"
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_endian.h>
+#define ETH_P_IP 0x0800
+#define FILE_TRANSFER_PORT 8443 // 假设文件传输在8443端口
+#define NGINX_IP 0x66fc450a // 10.69.252.102的网络字节序表示
+
+#define SERVER_IP 0x77e6450a // 10.69.230.119的网络字节序表示
+
+#define SQL_SERVER 0x76e6450a // 10.69.230.118的网络字节序表示
+
+#define SQL_PORT 3306 // Mysql端口
+
+#define REDIS_PORT 6379 // Redis端口
+
+//}
+/// @ifindex 2
+/// @flags 0
+/// @xdpopts {"old_prog_fd":0}
+SEC("xdp")
+int xdp_pass(struct xdp_md* ctx) {
+    void* data = (void*)(long)ctx->data;
+    void* data_end = (void*)(long)ctx->data_end;
+
+    // 计算数据包大小
+    int packet_size = data_end - data;
+    bpf_printk("Packet size is:%d", packet_size);
+    
+
+    // 确保以太网头部有足够的数据
+    if ((void*)eth + sizeof(*eth) > data_end)
+        return XDP_PASS;
+
+    // 检查是否为 IP 包
+    if (eth->h_proto != __bpf_htons(ETH_P_IP))
+        return XDP_PASS;
+
+    // 解析 IP 头部
+    struct iphdr* iph = (void*)eth + sizeof(*eth);
+    if ((void*)iph + sizeof(*iph) > data_end)
+        return XDP_PASS;
+
+    struct tcphdr* th = (void*)iph + iph->ihl * 4;
+    if((void*)th + sizeof(*th) > data_end)
+        return XDP_PASS;
+    
+    bpf_printk("Source IP: 0x%x", iph->saddr);
+    bpf_printk("Dest IP: 0x%x", &iph->daddr);
+    bpf_printk("Source IP: %pi4", &iph->saddr);
+    bpf_printk("Dest IP: %pi4", &iph->daddr);
+    
+    // 检查源 IP 地址是否为 10.69.252.102,如果不是，只允许后端服务器和后端数据库的3306和6379端口通信
+    if (iph->saddr != NGINX_IP && iph->saddr != SERVER_IP){
+        if(__bpf_ntohs(th->source) == SQL_PORT && iph->saddr == SQL_SERVER){
+            return XDP_PASS;
+        }else if(__bpf_ntohs(th->dest) == SQL_PORT && iph->daddr == SQL_SERVER){
+	    return XDP_PASS;
+	}else if(__bpf_ntohs(th->source) == REDIS_PORT && iph->saddr == SQL_SERVER){
+	    return XDP_PASS;
+	}else if(__bpf_ntohs(th->dest) == REDIS_PORT && iph->daddr == SQL_SERVER){
+	    return XDP_PASS;
+	}else{
+            bpf_printk("Packet is dropped\n");
+            return XDP_DROP;
+        }
+    }
+
+    // 如果源 IP 匹配，允许转发
+    return XDP_PASS;
+}
+
+char __license[] SEC("license") = "GPL";
+/*******************************************
+10.69.206.253服务器防御程序
+#include "vmlinux.h"
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_endian.h>
+#define ETH_P_IP 0x0800
+#define FILE_TRANSFER_PORT 8443 // 假设文件传输在8443端口
+#define NGINX_IP 0x66fc450a // 10.69.252.102的网络字节序表示
+
+#define SERVER_IP 0xfdce450a // 10.69.206.253的网络字节序表示
+
+#define SQL_SERVER 0x76e6450a // 10.69.230.118的网络字节序表示
+
+#define SQL_PORT 3306 // Mysql端口
+
+#define REDIS_PORT 6379 // Redis端口
+
+//}
+/// @ifindex 2
+/// @flags 0
+/// @xdpopts {"old_prog_fd":0}
+SEC("xdp")
+int xdp_pass(struct xdp_md* ctx) {
+    void* data = (void*)(long)ctx->data;
+    void* data_end = (void*)(long)ctx->data_end;
+
+    // 计算数据包大小
+    int packet_size = data_end - data;
+    bpf_printk("Packet size is:%d", packet_size);
+    
+
+    // 确保以太网头部有足够的数据
+    struct ethhdr* eth = data;
+    if ((void*)eth + sizeof(*eth) > data_end)
+        return XDP_PASS;
+
+    // 检查是否为 IP 包
+    if (eth->h_proto != __bpf_htons(ETH_P_IP))
+        return XDP_PASS;
+
+    // 解析 IP 头部
+    struct iphdr* iph = (void*)eth + sizeof(*eth);
+    if ((void*)iph + sizeof(*iph) > data_end)
+        return XDP_PASS;
+
+    struct tcphdr* th = (void*)iph + iph->ihl * 4;
+    if((void*)th + sizeof(*th) > data_end)
+        return XDP_PASS;
+    
+    bpf_printk("Source IP: 0x%x", iph->saddr);
+    bpf_printk("Dest IP: 0x%x", &iph->daddr);
+    bpf_printk("Source IP: %pi4", &iph->saddr);
+    bpf_printk("Dest IP: %pi4", &iph->daddr);
+    
+    // 检查源 IP 地址是否为 10.69.252.102,如果不是，只允许后端服务器和后端数据库的3306和6379端口通信
+    if (iph->saddr != NGINX_IP && iph->saddr != SERVER_IP){
+        if(__bpf_ntohs(th->source) == SQL_PORT && iph->saddr == SQL_SERVER){
+            return XDP_PASS;
+        }else if(__bpf_ntohs(th->dest) == SQL_PORT && iph->daddr == SQL_SERVER){
+	    return XDP_PASS;
+	}else if(__bpf_ntohs(th->source) == REDIS_PORT && iph->saddr == SQL_SERVER){
+	    return XDP_PASS;
+	}else if(__bpf_ntohs(th->dest) == REDIS_PORT && iph->daddr == SQL_SERVER){
+	    return XDP_PASS;
+	}else{
+            bpf_printk("Packet is dropped\n");
+            return XDP_DROP;
+        }
+    }
+
+
+    // 如果源 IP 匹配，允许转发
+    return XDP_PASS;
+}
+
+char __license[] SEC("license") = "GPL";
+
